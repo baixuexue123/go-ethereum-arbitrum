@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -276,6 +277,48 @@ func (api *FilterAPI) Logs(ctx context.Context, crit FilterCriteria) (*rpc.Subsc
 					log := log
 					notifier.Notify(rpcSub.ID, &log)
 				}
+			case <-rpcSub.Err(): // client send an unsubscribe request
+				return
+			}
+		}
+	}()
+
+	return rpcSub, nil
+}
+
+func (api *FilterAPI) BatchLogs(ctx context.Context, crit FilterCriteria) (*rpc.Subscription, error) {
+	notifier, supported := rpc.NotifierFromContext(ctx)
+	if !supported {
+		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
+	}
+
+	var (
+		rpcSub = notifier.CreateSubscription()
+		evCh   = make(chan core.ChainEvent)
+	)
+
+	type EventAux struct {
+		BlockNumber int64        `json:"blockNumber"`
+		BlockHash   common.Hash  `json:"blockHash"`
+		Logs        []*types.Log `json:"logs"`
+	}
+
+	evSub, err := api.events.SubscribeChainEvent(ethereum.FilterQuery(crit), evCh)
+	if err != nil {
+		return nil, err
+	}
+
+	go func() {
+		defer evSub.Unsubscribe()
+		for {
+			select {
+			case ev := <-evCh:
+				aux := EventAux{
+					BlockNumber: ev.Block.Number().Int64(),
+					BlockHash:   ev.Hash,
+					Logs:        ev.Logs,
+				}
+				notifier.Notify(rpcSub.ID, aux)
 			case <-rpcSub.Err(): // client send an unsubscribe request
 				return
 			}

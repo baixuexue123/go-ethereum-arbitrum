@@ -154,6 +154,8 @@ const (
 	PendingTransactionsSubscription
 	// BlocksSubscription queries hashes for blocks that are imported
 	BlocksSubscription
+	// ChainEventSubscription queries for chain event
+	ChainEventSubscription
 	// LastIndexSubscription keeps track of the last index
 	LastIndexSubscription
 )
@@ -171,15 +173,16 @@ const (
 )
 
 type subscription struct {
-	id        rpc.ID
-	typ       Type
-	created   time.Time
-	logsCrit  ethereum.FilterQuery
-	logs      chan []*types.Log
-	txs       chan []*types.Transaction
-	headers   chan *types.Header
-	installed chan struct{} // closed when the filter is installed
-	err       chan error    // closed when the filter is uninstalled
+	id          rpc.ID
+	typ         Type
+	created     time.Time
+	logsCrit    ethereum.FilterQuery
+	logs        chan []*types.Log
+	txs         chan []*types.Transaction
+	headers     chan *types.Header
+	chainEvents chan core.ChainEvent
+	installed   chan struct{} // closed when the filter is installed
+	err         chan error    // closed when the filter is uninstalled
 }
 
 // EventSystem creates subscriptions, processes events and broadcasts them to the
@@ -324,15 +327,68 @@ func (es *EventSystem) SubscribeLogs(crit ethereum.FilterQuery, logs chan []*typ
 // given criteria to the given logs channel.
 func (es *EventSystem) subscribeLogs(crit ethereum.FilterQuery, logs chan []*types.Log) *Subscription {
 	sub := &subscription{
-		id:        rpc.NewID(),
-		typ:       LogsSubscription,
-		logsCrit:  crit,
-		created:   time.Now(),
-		logs:      logs,
-		txs:       make(chan []*types.Transaction),
-		headers:   make(chan *types.Header),
-		installed: make(chan struct{}),
-		err:       make(chan error),
+		id:          rpc.NewID(),
+		typ:         LogsSubscription,
+		logsCrit:    crit,
+		created:     time.Now(),
+		logs:        logs,
+		txs:         make(chan []*types.Transaction),
+		headers:     make(chan *types.Header),
+		chainEvents: make(chan core.ChainEvent),
+		installed:   make(chan struct{}),
+		err:         make(chan error),
+	}
+	return es.subscribe(sub)
+}
+
+func (es *EventSystem) SubscribeChainEvent(crit ethereum.FilterQuery, ev chan core.ChainEvent) (*Subscription, error) {
+	if len(crit.Topics) > maxTopics {
+		return nil, errExceedMaxTopics
+	}
+	var from, to rpc.BlockNumber
+	if crit.FromBlock == nil {
+		from = rpc.LatestBlockNumber
+	} else {
+		from = rpc.BlockNumber(crit.FromBlock.Int64())
+	}
+	if crit.ToBlock == nil {
+		to = rpc.LatestBlockNumber
+	} else {
+		to = rpc.BlockNumber(crit.ToBlock.Int64())
+	}
+
+	// Pending logs are not supported anymore.
+	if from == rpc.PendingBlockNumber || to == rpc.PendingBlockNumber {
+		return nil, errPendingLogsUnsupported
+	}
+
+	// only interested in new mined logs
+	if from == rpc.LatestBlockNumber && to == rpc.LatestBlockNumber {
+		return es.subscribeChainEvent(crit, ev), nil
+	}
+	// only interested in mined logs within a specific block range
+	if from >= 0 && to >= 0 && to >= from {
+		return es.subscribeChainEvent(crit, ev), nil
+	}
+	// interested in logs from a specific block number to new mined blocks
+	if from >= 0 && to == rpc.LatestBlockNumber {
+		return es.subscribeChainEvent(crit, ev), nil
+	}
+	return nil, errInvalidBlockRange
+}
+
+func (es *EventSystem) subscribeChainEvent(crit ethereum.FilterQuery, ev chan core.ChainEvent) *Subscription {
+	sub := &subscription{
+		id:          rpc.NewID(),
+		typ:         ChainEventSubscription,
+		logsCrit:    crit,
+		created:     time.Now(),
+		logs:        make(chan []*types.Log),
+		txs:         make(chan []*types.Transaction),
+		headers:     make(chan *types.Header),
+		chainEvents: ev,
+		installed:   make(chan struct{}),
+		err:         make(chan error),
 	}
 	return es.subscribe(sub)
 }
@@ -341,14 +397,15 @@ func (es *EventSystem) subscribeLogs(crit ethereum.FilterQuery, logs chan []*typ
 // imported in the chain.
 func (es *EventSystem) SubscribeNewHeads(headers chan *types.Header) *Subscription {
 	sub := &subscription{
-		id:        rpc.NewID(),
-		typ:       BlocksSubscription,
-		created:   time.Now(),
-		logs:      make(chan []*types.Log),
-		txs:       make(chan []*types.Transaction),
-		headers:   headers,
-		installed: make(chan struct{}),
-		err:       make(chan error),
+		id:          rpc.NewID(),
+		typ:         BlocksSubscription,
+		created:     time.Now(),
+		logs:        make(chan []*types.Log),
+		txs:         make(chan []*types.Transaction),
+		headers:     headers,
+		chainEvents: make(chan core.ChainEvent),
+		installed:   make(chan struct{}),
+		err:         make(chan error),
 	}
 	return es.subscribe(sub)
 }
@@ -357,14 +414,15 @@ func (es *EventSystem) SubscribeNewHeads(headers chan *types.Header) *Subscripti
 // transactions that enter the transaction pool.
 func (es *EventSystem) SubscribePendingTxs(txs chan []*types.Transaction) *Subscription {
 	sub := &subscription{
-		id:        rpc.NewID(),
-		typ:       PendingTransactionsSubscription,
-		created:   time.Now(),
-		logs:      make(chan []*types.Log),
-		txs:       txs,
-		headers:   make(chan *types.Header),
-		installed: make(chan struct{}),
-		err:       make(chan error),
+		id:          rpc.NewID(),
+		typ:         PendingTransactionsSubscription,
+		created:     time.Now(),
+		logs:        make(chan []*types.Log),
+		txs:         txs,
+		headers:     make(chan *types.Header),
+		chainEvents: make(chan core.ChainEvent),
+		installed:   make(chan struct{}),
+		err:         make(chan error),
 	}
 	return es.subscribe(sub)
 }
@@ -392,6 +450,10 @@ func (es *EventSystem) handleTxsEvent(filters filterIndex, ev core.NewTxsEvent) 
 func (es *EventSystem) handleChainEvent(filters filterIndex, ev core.ChainEvent) {
 	for _, f := range filters[BlocksSubscription] {
 		f.headers <- ev.Block.Header()
+	}
+	for _, f := range filters[ChainEventSubscription] {
+		ev.Logs = filterLogs(ev.Logs, f.logsCrit.FromBlock, f.logsCrit.ToBlock, f.logsCrit.Addresses, f.logsCrit.Topics)
+		f.chainEvents <- ev
 	}
 }
 

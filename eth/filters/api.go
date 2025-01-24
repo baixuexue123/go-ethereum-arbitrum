@@ -297,6 +297,12 @@ func (api *FilterAPI) BatchLogs(ctx context.Context, crit FilterCriteria) (*rpc.
 		evCh   = make(chan core.ChainEvent)
 	)
 
+	type EventAux struct {
+		BlockNumber int64        `json:"blockNumber"`
+		BlockHash   common.Hash  `json:"blockHash"`
+		Logs        []*types.Log `json:"logs"`
+	}
+
 	evSub, err := api.events.SubscribeChainEvent(ethereum.FilterQuery(crit), evCh)
 	if err != nil {
 		return nil, err
@@ -307,7 +313,12 @@ func (api *FilterAPI) BatchLogs(ctx context.Context, crit FilterCriteria) (*rpc.
 		for {
 			select {
 			case ev := <-evCh:
-				notifier.Notify(rpcSub.ID, ev)
+				aux := EventAux{
+					BlockNumber: ev.Block.Number().Int64(),
+					BlockHash:   ev.Hash,
+					Logs:        ev.Logs,
+				}
+				notifier.Notify(rpcSub.ID, aux)
 			case <-rpcSub.Err(): // client send an unsubscribe request
 				return
 			}

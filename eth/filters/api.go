@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -292,21 +293,21 @@ func (api *FilterAPI) BatchLogs(ctx context.Context, crit FilterCriteria) (*rpc.
 	}
 
 	var (
-		rpcSub      = notifier.CreateSubscription()
-		matchedLogs = make(chan []*types.Log)
+		rpcSub = notifier.CreateSubscription()
+		evCh   = make(chan core.ChainEvent)
 	)
 
-	logsSub, err := api.events.SubscribeLogs(ethereum.FilterQuery(crit), matchedLogs)
+	evSub, err := api.events.SubscribeChainEvent(ethereum.FilterQuery(crit), evCh)
 	if err != nil {
 		return nil, err
 	}
 
 	go func() {
-		defer logsSub.Unsubscribe()
+		defer evSub.Unsubscribe()
 		for {
 			select {
-			case logs := <-matchedLogs:
-				notifier.Notify(rpcSub.ID, logs)
+			case ev := <-evCh:
+				notifier.Notify(rpcSub.ID, ev)
 			case <-rpcSub.Err(): // client send an unsubscribe request
 				return
 			}

@@ -154,9 +154,10 @@ const (
 	PendingTransactionsSubscription
 	// BlocksSubscription queries hashes for blocks that are imported
 	BlocksSubscription
+	// ChainEventSubscription queries for chain event
+	ChainEventSubscription
 	// LastIndexSubscription keeps track of the last index
 	LastIndexSubscription
-	ChainEventSubscription
 )
 
 const (

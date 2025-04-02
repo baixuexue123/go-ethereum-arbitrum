@@ -295,6 +295,40 @@ func (api *FilterAPI) Logs(ctx context.Context, crit FilterCriteria) (*rpc.Subsc
 	return rpcSub, nil
 }
 
+func (api *FilterAPI) OneLogs(ctx context.Context, crit FilterCriteria) (*rpc.Subscription, error) {
+	notifier, supported := rpc.NotifierFromContext(ctx)
+	if !supported {
+		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
+	}
+
+	var (
+		rpcSub      = notifier.CreateSubscription()
+		matchedLogs = make(chan []*types.Log)
+	)
+
+	logsSub, err := api.events.SubscribeLogs(ethereum.FilterQuery(crit), matchedLogs)
+	if err != nil {
+		return nil, err
+	}
+
+	go func() {
+		defer logsSub.Unsubscribe()
+		for {
+			select {
+			case logs := <-matchedLogs:
+				for _, log := range logs {
+					notifier.Notify(rpcSub.ID, &log)
+				}
+				notifier.Notify(rpcSub.ID, &types.Log{})
+			case <-rpcSub.Err(): // client send an unsubscribe request
+				return
+			}
+		}
+	}()
+
+	return rpcSub, nil
+}
+
 // FilterCriteria represents a request to create a new filter.
 // Same as ethereum.FilterQuery but with UnmarshalJSON() method.
 type FilterCriteria ethereum.FilterQuery

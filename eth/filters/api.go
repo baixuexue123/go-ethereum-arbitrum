@@ -317,8 +317,8 @@ func (api *FilterAPI) BatchLogs(ctx context.Context, crit FilterCriteria) (*rpc.
 			select {
 			case ev := <-evCh:
 				aux := EventAux{
-					BlockNumber: ev.Block.Number().Int64(),
-					BlockHash:   ev.Hash,
+					BlockNumber: ev.Header.Number.Int64(),
+					BlockHash:   ev.Header.Hash(),
 					Logs:        ev.Logs,
 				}
 				notifier.Notify(rpcSub.ID, aux)

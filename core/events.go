@@ -28,6 +28,7 @@ type RemovedLogsEvent struct{ Logs []*types.Log }
 
 type ChainEvent struct {
 	Header *types.Header
+	Logs   []*types.Log
 }
 
 type ChainHeadEvent struct {

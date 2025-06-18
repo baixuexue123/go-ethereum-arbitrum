@@ -352,9 +352,8 @@ func (api *FilterAPI) BatchLogs(ctx context.Context, crit FilterCriteria) (*rpc.
 			select {
 			case ev := <-evCh:
 				aux := EventAux{
-					BlockNumber: ev.Block.Number().Int64(),
-					BlockHash:   ev.Block.Hash(),
-					Logs:        ev.Logs,
+					BlockNumber: ev.Header.Number.Int64(),
+					BlockHash:   ev.Header.TxHash,
 				}
 				notifier.Notify(rpcSub.ID, aux)
 			case <-rpcSub.Err(): // client send an unsubscribe request

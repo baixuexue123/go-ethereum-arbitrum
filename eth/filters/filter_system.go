@@ -452,7 +452,6 @@ func (es *EventSystem) handleChainEvent(filters filterIndex, ev core.ChainEvent)
 		f.headers <- ev.Header
 	}
 	for _, f := range filters[ChainEventSubscription] {
-		ev.Logs = filterLogs(ev.Logs, f.logsCrit.FromBlock, f.logsCrit.ToBlock, f.logsCrit.Addresses, f.logsCrit.Topics)
 		f.chainEvents <- ev
 	}
 }
